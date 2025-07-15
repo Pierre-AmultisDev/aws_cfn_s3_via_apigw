@@ -1,0 +1,304 @@
+# Some handy info
+# ===============
+# https://yaml-multiline.info/
+# >-   create one long single line of all the lines below. Replace newlines with spaces and no new line at the end
+# |    keep the newlines and a single newline at the end
+# |-   keep the newlines and no newline at the end
+# |+   keep the newlines and all newlines at the end
+#
+# Tricks
+# ======
+# Always do this. It ensures that : in command or parameters is possible
+# command: >-
+#   some comand with parameters  
+#
+# Inspiration:
+# - https://yellowdesert.consulting/2020/02/28/cloudformation-join-use-sub-instead/
+#
+# Using Fn::Sub: in stead of Fn::Join:
+# https://theburningmonk.com/2019/05/cloudformation-protip-use-fnsub-instead-of-fnjoin/
+#
+# Using Fn::Sub: in stead of !Sub supports the use of AWS::LanguageExtensions transform which is needed for Fn::ForEach
+# https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/intrinsic-function-reference-foreach.html
+# https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/transform-aws-languageextensions.html
+# 
+#
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'S3 bucket with direct API Gateway integration for file operations with authentication and binary content support'
+
+Parameters:
+  BucketName:
+    Type: String
+    Description: 'Name of the S3 bucket to create for file storage'
+    Default: 'my-api-files-bucket'
+    AllowedPattern: '^[a-z0-9][a-z0-9.-]*[a-z0-9]$'
+    ConstraintDescription: 'Bucket name can include numbers, lowercase letters, periods (.), and hyphens (-). It cannot start or end with a period or hyphen.'
+  
+  ApiName:
+    Type: String
+    Description: 'Name of the API Gateway REST API'
+    Default: 'S3DirectIntegrationAPI'
+
+Resources:
+  # S3 Bucket for file storage
+  S3Bucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Ref BucketName
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: 'AES256'
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders:
+              - '*'
+            AllowedMethods:
+              - GET
+              - PUT
+              - HEAD
+            AllowedOrigins:
+              - '*'  # Consider restricting this to specific origins in production
+            MaxAge: 3000
+
+  # IAM Role for API Gateway to access S3
+  ApiGatewayS3Role:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: apigateway.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs'
+      Policies:
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 's3:GetObject'
+                  - 's3:PutObject'
+                Resource: !Sub 'arn:aws:s3:::${BucketName}/*'
+
+  # API Gateway REST API with binary media types
+  ApiGateway:
+    Type: 'AWS::ApiGateway::RestApi'
+    Properties:
+      Name: !Ref ApiName
+      Description: 'API for direct S3 file operations with binary content support'
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+      ApiKeySourceType: HEADER
+      BinaryMediaTypes:
+        - 'application/pdf'
+        - 'application/msword'
+        - 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        - 'application/octet-stream'
+        - 'image/jpeg'
+        - 'image/png'
+        - 'image/gif'
+        - 'application/vnd.ms-excel'
+        - 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        - 'application/zip'
+        - '*/*'  # Support all binary types
+
+  # API Gateway Resource for files
+  FilesResource:
+    Type: 'AWS::ApiGateway::Resource'
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      PathPart: 'files'
+
+  # API Gateway Resource for file operations with path parameter
+  FileResource:
+    Type: 'AWS::ApiGateway::Resource'
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ParentId: !Ref FilesResource
+      PathPart: '{key}'
+
+  # API Gateway Method for GET (read file)
+  GetFileMethod:
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref FileResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      ApiKeyRequired: true
+      RequestParameters:
+        method.request.path.key: true
+      Integration:
+        Type: AWS
+        Credentials: !GetAtt ApiGatewayS3Role.Arn
+        IntegrationHttpMethod: GET
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:s3:path/${BucketName}/{key}'
+        RequestParameters:
+          integration.request.path.key: method.request.path.key
+        PassthroughBehavior: WHEN_NO_MATCH
+        ContentHandling: CONVERT_TO_BINARY
+        IntegrationResponses:
+          - StatusCode: '200'
+            ResponseParameters:
+              method.response.header.Content-Type: 'integration.response.header.Content-Type'
+              method.response.header.Content-Length: 'integration.response.header.Content-Length'
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ContentHandling: CONVERT_TO_BINARY
+          - StatusCode: '400'
+            SelectionPattern: '4\d{2}'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: '500'
+            SelectionPattern: '5\d{2}'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+      MethodResponses:
+        - StatusCode: '200'
+          ResponseParameters:
+            method.response.header.Content-Type: true
+            method.response.header.Content-Length: true
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: '400'
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: '500'
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+
+  # API Gateway Method for PUT (write file)
+  PutFileMethod:
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref FileResource
+      HttpMethod: PUT
+      AuthorizationType: NONE
+      ApiKeyRequired: true
+      RequestParameters:
+        method.request.path.key: true
+        method.request.header.Content-Type: false
+      Integration:
+        Type: AWS
+        Credentials: !GetAtt ApiGatewayS3Role.Arn
+        IntegrationHttpMethod: PUT
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:s3:path/${BucketName}/{key}'
+        RequestParameters:
+          integration.request.path.key: method.request.path.key
+          integration.request.header.Content-Type: method.request.header.Content-Type
+        PassthroughBehavior: WHEN_NO_MATCH
+        ContentHandling: CONVERT_TO_BINARY
+        IntegrationResponses:
+          - StatusCode: '200'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: '400'
+            SelectionPattern: '4\d{2}'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: '500'
+            SelectionPattern: '5\d{2}'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+      MethodResponses:
+        - StatusCode: '200'
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: '400'
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: '500'
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+
+  # OPTIONS method for CORS support
+  OptionsMethod:
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref FileResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      ApiKeyRequired: false
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,Content-Disposition'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,PUT,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  # API Gateway Deployment
+  ApiDeployment:
+    Type: 'AWS::ApiGateway::Deployment'
+    DependsOn:
+      - GetFileMethod
+      - PutFileMethod
+      - OptionsMethod
+    Properties:
+      RestApiId: !Ref ApiGateway
+      StageName: 'prod'
+
+  # API Key for authentication
+  ApiKey:
+    Type: 'AWS::ApiGateway::ApiKey'
+    DependsOn:
+      - ApiDeployment
+    Properties:
+      Name: !Sub '${ApiName}-ApiKey'
+      Description: 'API Key for S3 direct integration'
+      Enabled: true
+      StageKeys:
+        - RestApiId: !Ref ApiGateway
+          StageName: 'prod'
+
+  # Usage Plan for API Key
+  UsagePlan:
+    Type: 'AWS::ApiGateway::UsagePlan'
+    Properties:
+      ApiStages:
+        - ApiId: !Ref ApiGateway
+          Stage: 'prod'
+      Description: !Sub 'Usage plan for ${ApiName}'
+      Quota:
+        Limit: 1000
+        Period: MONTH
+      Throttle:
+        BurstLimit: 10
+        RateLimit: 5
+
+  # Associate API Key with Usage Plan
+  UsagePlanKey:
+    Type: 'AWS::ApiGateway::UsagePlanKey'
+    Properties:
+      KeyId: !Ref ApiKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref UsagePlan
+
+Outputs:
+  S3BucketName:
+    Description: 'Name of the S3 bucket'
+    Value: !Ref BucketName
+
+  ApiEndpoint:
+    Description: 'API Gateway endpoint URL'
+    Value: !Sub 'https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/prod/'
+
+  ApiKeyId:
+    Description: 'API Key ID (retrieve the actual key from AWS Console or CLI)'
+    Value: !Ref ApiKey

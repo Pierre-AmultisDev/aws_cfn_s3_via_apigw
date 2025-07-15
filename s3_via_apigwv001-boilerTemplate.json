@@ -1,0 +1,12 @@
+[
+  {
+    "ParameterKey": "BucketName",
+    "ParameterValue": "S3_BUCKET_NAME"
+  },
+  {
+    "ParameterKey": "ApiName",
+    "ParameterValue": "API_GATEWAY_NAME"
+  }
+]
+
+

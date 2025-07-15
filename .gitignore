@@ -1,0 +1,10 @@
+/history
+/examples
+
+TODO*
+_todo*
+UUID*
+
+*-boiler.json
+*-boiler*.json
+!*-boilerTemplate*.json
