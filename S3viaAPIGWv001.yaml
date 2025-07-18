@@ -23,8 +23,19 @@
 # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/transform-aws-languageextensions.html
 # 
 #
+#When you deploy this template, the CloudFormation stack will be in the CREATE_IN_PROGRESS
+#state until the certificate is validated. Since you're not using Route 53, you'll need to manually add DNS validation records to your DNS provider. Here's how to handle this:3
+#
+# -  After deploying the template, go to the AWS Certificate Manager console.
+# -  Find your certificate (it will be in "Pending validation" status).
+# -  Click on the certificate to view the validation details.
+# -  You'll see DNS validation records that need to be created (typically CNAME records).
+# -  Add these validation records to your DNS provider.
+# -  Wait for the validation to complete (can take from minutes to hours).
+# -  Once validated, the CloudFormation stack will continue and complete.
+# 
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'S3 bucket with direct API Gateway integration for file operations with authentication and binary content support'
+Description: 'S3 bucket with direct API Gateway integration, custom domain name, and ACM certificate'
 
 Parameters:
   BucketName:
@@ -38,8 +49,35 @@ Parameters:
     Type: String
     Description: 'Name of the API Gateway REST API'
     Default: 'S3DirectIntegrationAPI'
+    
+  StageName:
+    Type: String
+    Description: 'Name of the API Gateway stage'
+    Default: 'prod'
+    
+  CustomDomainName:
+    Type: String
+    Description: 'Custom domain name for the API (e.g., api.example.com)'
+    
+  ValidationDomainName:
+    Type: String
+    Description: 'Domain name for certificate validation (usually the same as CustomDomainName or its parent domain)'
+    Default: ''
 
 Resources:
+  # ACM Certificate for the custom domain
+  Certificate:
+    Type: 'AWS::CertificateManager::Certificate'
+    Properties:
+      DomainName: !Ref CustomDomainName
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Ref CustomDomainName
+          ValidationDomain: !If [UseCustomValidationDomain, !Ref ValidationDomainName, !Ref CustomDomainName]
+      Tags:
+        - Key: Name
+          Value: !Sub '${ApiName}-certificate'
+
   # S3 Bucket for file storage
   S3Bucket:
     Type: 'AWS::S3::Bucket'
@@ -83,7 +121,10 @@ Resources:
                 Action:
                   - 's3:GetObject'
                   - 's3:PutObject'
-                Resource: !Sub 'arn:aws:s3:::${BucketName}/*'
+                  - 's3:ListBucket'
+                Resource: 
+                  - !Sub 'arn:aws:s3:::${BucketName}'
+                  - !Sub 'arn:aws:s3:::${BucketName}/*'
 
   # API Gateway REST API with binary media types
   ApiGateway:
@@ -252,28 +293,62 @@ Resources:
       - OptionsMethod
     Properties:
       RestApiId: !Ref ApiGateway
-      StageName: 'prod'
+      Description: 'Deployment for S3 direct integration API'
+
+  # API Gateway Stage
+  # The stage is created as a separate resource with its own logical ID
+  ApiStage:
+    Type: 'AWS::ApiGateway::Stage'
+    Properties:
+      DeploymentId: !Ref ApiDeployment
+      RestApiId: !Ref ApiGateway
+      StageName: !Ref StageName
+      Description: !Sub 'Stage for ${ApiName}'
+
+  # Custom Domain Name for API Gateway
+  CustomDomain:
+    Type: 'AWS::ApiGateway::DomainName'
+    DependsOn: Certificate
+    Properties:
+      DomainName: !Ref CustomDomainName
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+      RegionalCertificateArn: !Ref Certificate
+
+  # Base Path Mapping to connect the custom domain to the API stage
+  BasePathMapping:
+    Type: 'AWS::ApiGateway::BasePathMapping'
+    DependsOn:
+      - CustomDomain
+      - ApiStage
+    Properties:
+      DomainName: !Ref CustomDomainName
+      RestApiId: !Ref ApiGateway
+      Stage: !Ref StageName
 
   # API Key for authentication
   ApiKey:
     Type: 'AWS::ApiGateway::ApiKey'
     DependsOn:
-      - ApiDeployment
+      - ApiStage
     Properties:
       Name: !Sub '${ApiName}-ApiKey'
       Description: 'API Key for S3 direct integration'
       Enabled: true
       StageKeys:
         - RestApiId: !Ref ApiGateway
-          StageName: 'prod'
+          StageName: !Ref StageName
 
   # Usage Plan for API Key
   UsagePlan:
     Type: 'AWS::ApiGateway::UsagePlan'
+    DependsOn:
+      - ApiStage
     Properties:
       ApiStages:
         - ApiId: !Ref ApiGateway
-          Stage: 'prod'
+          Stage: !Ref StageName
       Description: !Sub 'Usage plan for ${ApiName}'
       Quota:
         Limit: 1000
@@ -283,12 +358,19 @@ Resources:
         RateLimit: 5
 
   # Associate API Key with Usage Plan
+  # The API Key doesn't try to associate with a stage until it's fully created
   UsagePlanKey:
     Type: 'AWS::ApiGateway::UsagePlanKey'
+    DependsOn:
+      - UsagePlan
+      - ApiKey
     Properties:
       KeyId: !Ref ApiKey
       KeyType: API_KEY
       UsagePlanId: !Ref UsagePlan
+
+Conditions:
+  UseCustomValidationDomain: !Not [!Equals [!Ref ValidationDomainName, '']]
 
 Outputs:
   S3BucketName:
@@ -297,8 +379,24 @@ Outputs:
 
   ApiEndpoint:
     Description: 'API Gateway endpoint URL'
-    Value: !Sub 'https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/prod/'
+    Value: !Sub 'https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/${StageName}/'
+    
+  CustomDomainEndpoint:
+    Description: 'Custom domain endpoint URL'
+    Value: !Sub 'https://${CustomDomainName}/'
+    
+  RegionalDomainName:
+    Description: 'Regional domain name for DNS configuration'
+    Value: !GetAtt CustomDomain.RegionalDomainName
+    
+  RegionalHostedZoneId:
+    Description: 'Regional hosted zone ID for DNS configuration'
+    Value: !GetAtt CustomDomain.RegionalHostedZoneId
 
   ApiKeyId:
     Description: 'API Key ID (retrieve the actual key from AWS Console or CLI)'
     Value: !Ref ApiKey
+    
+  CertificateValidationInfo:
+    Description: 'Information about certificate validation (check AWS Console for DNS validation records)'
+    Value: !Sub 'Check the ACM console for DNS validation records for ${CustomDomainName}'
