@@ -1,25 +1,6 @@
 # aws-cfn-s3_via_apigw
-Cloudformation template to create a service that can upload and download files on S3 via API gateway
+Cloudformation templates to create a service that can upload and download files on S3 via API gateway and create a custom domainname for the API.
 
-Replace parametervalues in *-boiler.json 
-```
-BucketName: Name of the S3 bucket to create
-ApiName:    Name for the API gateway 
-
-```
-
-Uploading files:
-```
-curl -X PUT \
-  https://your-api-endpoint.execute-api.region.amazonaws.com/prod/files/document.pdf \
-  -H 'x-api-key: your-api-key-here' \
-  -H 'Content-Type: application/pdf' \
-  --data-binary '@/path/to/your/document.pdf'
-```
-Downloading files:
-```
-curl -X GET \
-  https://your-api-endpoint.execute-api.region.amazonaws.com/prod/files/document.pdf \
-  -H 'x-api-key: your-api-key-here' \
-  --output downloaded-document.pdf
-```
+It uses [S3viaAPIGW](./S3viaAPIGW.md to create the API gateway. <BR><BR>
+If you want the API Gateway to be accesable via your own domain name use [CustomDomain](./CustomDomain.md) to create a verified custom domain <BR>
+ANd link the API Gateway to CustomDomain.
