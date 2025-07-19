@@ -40,7 +40,7 @@ APIValidationDomainName:  The of the domain to validate. Most of the time the sa
 ```
 
 ## 4) Create the CustomDomain stack using the Cloudformation script
-Update the content of _current_version with the this template (for example CustomDomainv001)
+Update the content of _current_version with the this template (for example CustomDomainv001) and run the required command in ../stack_scripts/yaml
 
 ## 5) Validate custom domain
 This CloudFormation template generates a ACM certificate but the linked domainname needs to be validated.

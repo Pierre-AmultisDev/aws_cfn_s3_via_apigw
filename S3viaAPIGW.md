@@ -38,8 +38,8 @@ BucketName: Name of the S3 bucket to create
 ApiName:    Name for the API gateway 
 
 ```
-## 4) Create the CustomDomain stack using the Cloudformation script
-Update the content of _current_version with the this template (for example S3viaAPIGWv001)
+## 4) Create the API Gateway stack using the Cloudformation script
+Update the content of _current_version with the this template (for example S3viaAPIGWv001) and run the required command in ../stack_scripts/yaml
 
 ## 5) Preliminary testing
 Uploading files:
