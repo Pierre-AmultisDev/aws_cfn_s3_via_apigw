@@ -1,0 +1,95 @@
+# Some handy info
+# ===============
+# https://yaml-multiline.info/
+# >-   create one long single line of all the lines below. Replace newlines with spaces and no new line at the end
+# |    keep the newlines and a single newline at the end
+# |-   keep the newlines and no newline at the end
+# |+   keep the newlines and all newlines at the end
+#
+# Tricks
+# ======
+# Always do this. It ensures that : in command or parameters is possible
+# command: >-
+#   some comand with parameters  
+#
+# Inspiration:
+# - https://yellowdesert.consulting/2020/02/28/cloudformation-join-use-sub-instead/
+#
+# Using Fn::Sub: in stead of Fn::Join:
+# https://theburningmonk.com/2019/05/cloudformation-protip-use-fnsub-instead-of-fnjoin/
+#
+# Using Fn::Sub: in stead of !Sub supports the use of AWS::LanguageExtensions transform which is needed for Fn::ForEach
+# https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/intrinsic-function-reference-foreach.html
+# https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/transform-aws-languageextensions.html
+# 
+#
+#When you deploy this template, the CloudFormation stack will be in the CREATE_IN_PROGRESS
+#state until the certificate is validated. Since you're not using Route 53, you'll need to manually add DNS validation records to your DNS provider. Here's how to handle this:3
+#
+# -  After deploying the template, go to the AWS Certificate Manager console.
+# -  Find your certificate (it will be in "Pending validation" status).
+# -  Click on the certificate to view the validation details.
+# -  You'll see DNS validation records that need to be created (typically CNAME records).
+# -  Add these validation records to your DNS provider.
+# -  Wait for the validation to complete (can take from minutes to hours).
+# -  Once validated, the CloudFormation stack will continue and complete.
+# 
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Creation of custom domain name for API Gateway including an ACM certificate'
+
+Parameters:
+  APICustomDomainName:
+    Type: String
+    Description: 'Custom domain name for the API (e.g., api.example.com)'
+    
+  APIValidationDomainName:
+    Type: String
+    Description: 'Domain name for certificate validation (usually the same as APICustomDomainName or its parent domain)'
+    Default: ''
+
+Resources:
+  # ACM Certificate for the custom domain
+  Certificate:
+    Type: 'AWS::CertificateManager::Certificate'
+    DeletionPolicy: Retain # keep even if CloudFormation stack is deleted
+    Properties:
+      DomainName: !Ref APICustomDomainName
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Ref APICustomDomainName
+          ValidationDomain: !If [UseCustomValidationDomain, !Ref APIValidationDomainName, !Ref APICustomDomainName]
+      Tags:
+        - Key: Name
+          Value: !Sub '${APICustomDomainName}-certificate'
+
+  # Custom Domain Name for API Gateway
+  CustomDomain:
+    Type: 'AWS::ApiGateway::DomainName'
+    DeletionPolicy: Retain # keep even if CloudFormation stack is deleted
+    DependsOn: Certificate
+    Properties:
+      DomainName: !Ref APICustomDomainName
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+      RegionalCertificateArn: !Ref Certificate
+
+Conditions:
+  UseCustomValidationDomain: !Not [!Equals [!Ref APIValidationDomainName, '']]
+
+Outputs:
+  CustomDomainEndpoint:
+    Description: 'Custom domain endpoint URL'
+    Value: !Sub 'https://${APICustomDomainName}/'
+    
+  RegionalDomainName:
+    Description: 'Regional domain name for DNS configuration'
+    Value: !GetAtt CustomDomain.RegionalDomainName
+    
+  RegionalHostedZoneId:
+    Description: 'Regional hosted zone ID for DNS configuration'
+    Value: !GetAtt CustomDomain.RegionalHostedZoneId
+
+  CertificateValidationInfo:
+    Description: 'Information about certificate validation (check AWS Console for DNS validation records)'
+    Value: !Sub 'Check the ACM console for DNS validation records for ${APICustomDomainName}'

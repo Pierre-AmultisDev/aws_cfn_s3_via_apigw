@@ -1,0 +1,10 @@
+[
+  {
+    "ParameterKey": "APICustomDomainName",
+    "ParameterValue": "CUSTOM.EXAMPLE.COM"
+  },
+  {
+    "ParameterKey": "APIValidationDomainName",
+    "ParameterValue": "CUSTOM.EXAMPLE.COM"
+  }
+]
