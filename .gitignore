@@ -1,6 +1,11 @@
 /history
 /examples
 
+# IDE
+.vscode/
+.idea/
+.ipynb_checkpoints/
+
 TODO*
 _todo*
 UUID*
