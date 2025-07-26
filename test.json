@@ -1,0 +1,26 @@
+    {
+                    "DEBUG_bucketName": "dierx-nester-documents",
+     "DEBUG_resourcePath": "/",
+     "DEBUG_domainName": "testPrefix.testDomainName",
+     "DEBUG_stageName": "test-invoke-stage",
+     "DEBUG_pathText": "/",
+                         "DEBUG_folders": "[dierx-nester-documents/111/, dierx-nester-documents/999/]",
+    "folderlist": [
+        "dierx-nester-documents/111/","dierx-nester-documents/999/"]
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

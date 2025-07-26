@@ -216,31 +216,27 @@ Resources:
         Credentials: !GetAtt ApiGatewayRole.Arn
         Uri: !Sub arn:aws:apigateway:${AWS::Region}:s3:path/${BucketName}
         RequestParameters:
+          integration.request.querystring.list-type: "'2'"
           integration.request.querystring.delimiter: "'/'"
+        PassthroughBehavior: WHEN_NO_TEMPLATES
 
         # Integration response settings
         # ----------------------------
         IntegrationResponses:
           - StatusCode: 200
             ResponseTemplates:
-              application/json: |
-                #set($response = $s3.listObjectsV2({"Bucket":"$util.urlEncode(${BucketName})", "Delimiter":"/"}))
-                #set($keys = [])
-                #foreach($p in $response.commonPrefixes)
-                  #set($name = $p.prefix.replace("/", ""))
-                  #if($name != "")
-                    #set($void = $keys.add($name))
-                  #end
+              application/xml: |
+                #set($inputRoot = $input.path('$'))
+                #set($prefixes = [])
+                #foreach($prefix in $inputRoot.ListBucketResult.CommonPrefixes)
+                  #set($void = $prefixes.add($prefix.Prefix))
                 #end
-                $keys
-        PassthroughBehavior: WHEN_NO_TEMPLATES
+                $util.toJson($prefixes)
 
       # Method response settings
       # ----------------------------
       MethodResponses:
         - StatusCode: 200
-#          ResponseModels:
-#            application/json: EmptyModel
           ResponseParameters:
             method.response.header.Access-Control-Allow-Origin: true
             method.response.header.Access-Control-Allow-Headers: true
@@ -263,8 +259,7 @@ Resources:
       ApiKeyRequired: true
       RequestParameters:
         method.request.path.complex: true
-      
-      # Integration request settings
+
       # ----------------------------
       Integration:
         Type: AWS
@@ -272,37 +267,31 @@ Resources:
         Credentials: !GetAtt ApiGatewayRole.Arn
         Uri: !Sub arn:aws:apigateway:${AWS::Region}:s3:path/${BucketName}/{complex_code}/
         RequestParameters:
-          integration.request.path.complex_code: method.request.path.complex
+          integration.request.querystring.list-type: "'2'"
           integration.request.querystring.delimiter: "'/'"
+          integration.request.querystring.prefix: "method.request.path.complex" 
+          integration.request.path.complex_code: method.request.path.complex  # used in Uri Path
+        PassthroughBehavior: WHEN_NO_TEMPLATES
 
         # Integration response settings
         # ----------------------------
         IntegrationResponses:
           - StatusCode: 200
             ResponseTemplates:
-              application/json: |
-                #set($prefix = "$input.params('complex_code')/")
-                #set($response = $s3.listObjectsV2({"Bucket":"$util.urlEncode(${BucketName})", "Delimiter":"/", "Prefix":"$prefix"}))
-                #set($keys = [])
-                #foreach($p in $response.commonPrefixes)
-                  #set($name = $p.prefix.replace($prefix, "").replace("/", ""))
-                  #if($name != "")
-                    #set($void = $keys.add($name))
-                  #end
+              application/xml: |
+                #set($inputRoot = $input.path('$'))
+                #set($prefixes = [])
+                #foreach($prefix in $inputRoot.ListBucketResult.CommonPrefixes)
+                  #set($void = $prefixes.add($prefix.Prefix))
                 #end
-                $keys
-#        RequestParameters:
-#          integration.request.querystring.delimiter: "'/'"
-##          integration.request.querystring.prefix: method.request.path.complex + '/'
-#          integration.request.querystring.prefix: method.request.path.complex
-        PassthroughBehavior: WHEN_NO_TEMPLATES
+                $util.toJson($prefixes)
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
 
       # Method response settings
       # ----------------------------
       MethodResponses:
         - StatusCode: 200
-#          ResponseModels:
-#            application/json: EmptyModel
           ResponseParameters:
             method.response.header.Access-Control-Allow-Origin: true
             method.response.header.Access-Control-Allow-Headers: true
@@ -342,7 +331,8 @@ Resources:
         Credentials: !GetAtt ApiGatewayRole.Arn
         Uri: !Sub arn:aws:apigateway:${AWS::Region}:s3:path/${BucketName}/{complex_code}/
         RequestParameters:
-          integration.request.path.complex_code: method.request.path.complex
+          integration.request.path.complex_code: method.request.path.complex  # used in Uri Path
+        PassthroughBehavior: WHEN_NO_TEMPLATES
 
         # Integration response settings
         # ----------------------------
@@ -381,25 +371,21 @@ Resources:
         IntegrationHttpMethod: GET
         Credentials: !GetAtt ApiGatewayRole.Arn
         Uri: !Sub arn:aws:apigateway:${AWS::Region}:s3:path/${BucketName}
+        PassthroughBehavior: WHEN_NO_TEMPLATES
 
         # Integration response settings
         # ----------------------------
         IntegrationResponses:
           - StatusCode: 200
-            ResponseTemplates:
-              application/json: |
-                #set($prefix = "$input.params('complex')/$input.params('zip_no')/")
-                #set($response = $s3.listObjectsV2({"Bucket":"$util.urlEncode(${BucketName})", "Prefix":"$prefix"}))
-                #set($files = [])
-                #foreach($o in $response.contents)
-                  #set($name = $o.key.replace($prefix, ""))
-                  #if($name != "")
-                    #set($void = $files.add($name))
-                  #end
+             ResponseTemplates:
+              application/xml: |
+                #set($inputRoot = $input.path('$'))
+                #set($prefixes = [])
+                #foreach($prefix in $inputRoot.ListBucketResult.CommonPrefixes)
+                  #set($void = $prefixes.add($prefix.Prefix))
                 #end
-                $files
-        PassthroughBehavior: WHEN_NO_TEMPLATES
-
+                $util.toJson($prefixes)
+                
       # Method response settings
       # ----------------------------
       MethodResponses:
@@ -444,8 +430,8 @@ Resources:
         Credentials: !GetAtt ApiGatewayRole.Arn
         Uri: !Sub arn:aws:apigateway:${AWS::Region}:s3:path/${BucketName}/{complex_code}/{zipno}/
         RequestParameters:
-          integration.request.path.complex_code: method.request.path.complex
-          integration.request.path.zipno: method.request.path.zip_no
+          integration.request.path.complex_code: method.request.path.complex  # used in Uri Path
+          integration.request.path.zipno: method.request.path.zip_no  # used in Uri Path
 
         # Integration response settings
         # ----------------------------
@@ -493,9 +479,9 @@ Resources:
         Uri: !Sub arn:aws:apigateway:${AWS::Region}:s3:path/${BucketName}/{complex_code}/{zipno}/{file}
         Credentials: !GetAtt ApiGatewayRole.Arn
         RequestParameters:
-          integration.request.path.zipno: method.request.path.zip_no
-          integration.request.path.complex_code: method.request.path.complex
-          integration.request.path.file: method.request.path.filename
+          integration.request.path.zipno: method.request.path.zip_no  # used in Uri Path
+          integration.request.path.complex_code: method.request.path.complex  # used in Uri Path
+          integration.request.path.file: method.request.path.filename  # used in Uri Path
         PassthroughBehavior: WHEN_NO_MATCH
 
         # Integration response settings
@@ -541,9 +527,9 @@ Resources:
         Uri: !Sub arn:aws:apigateway:${AWS::Region}:s3:path/${BucketName}/{complex_code}/{zipno}/{file}
         Credentials: !GetAtt ApiGatewayRole.Arn
         RequestParameters:
-          integration.request.path.complex_code: method.request.path.complex
-          integration.request.path.zipno: method.request.path.zip_no
-          integration.request.path.file: method.request.path.filename
+          integration.request.path.complex_code: method.request.path.complex  # used in Uri Path
+          integration.request.path.zipno: method.request.path.zip_no  # used in Uri Path
+          integration.request.path.file: method.request.path.filename  # used in Uri Path
         PassthroughBehavior: WHEN_NO_MATCH
 
         # Integration response settings
