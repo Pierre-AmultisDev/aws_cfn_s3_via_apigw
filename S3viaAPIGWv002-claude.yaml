@@ -264,11 +264,12 @@ Resources:
                 ##
                 ##  https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-mapping-template-reference.html
                 ##
+                ## For debuging purposes set debugVTL to true (extra output) or false (=no extra output)
                 #set($debugVTL = true)
                 ##
                 ## Start of JSON output
                 {
-                ## input.body migth have same chars that need escaping to create a valid JSON
+                ## input.body might have same chars that need escaping to create a valid JSON
                 #if($debugVTL) "DEBUG_inputbody": "$util.escapeJavaScript($input.body)",
                 #end
                 #set($bucketName = "")
@@ -296,19 +297,9 @@ Resources:
                 #set($folders = [])
                 #set($foldersExtended = [])
                 #foreach($part in $input.body.split("<CommonPrefixes>"))
-                ##    "= 0 =="
-                ##    foreach: $foreach.index
                     #if($foreach.index > 0)  ## index starts with 0, first part is not required 
-                ##        "= 1 =="
                         #set($segment = $part.replaceAll("<Prefix>", ""))  ## remove <Prefix> text from part
-                ##        "= 2 =="
-                ##        $segment
                         #set($name = $segment.split("</Prefix>")[0]) ## get all text before the prefix
-                ##        "= 4 =="
-                ##        $bucketName/$name
-                ##        "= 5 =="
-                ##        $name.length()
-                ##        "= 6 =="
                         #if($name != "")
                             #set($void = $folders.add($name))
                             #set($void = $foldersExtended.add("https://$domainName$pathText$name"))
@@ -317,110 +308,18 @@ Resources:
                 #end
                 #if($debugVTL) "DEBUG_folders": "$folders",
                 #end
+                ##
+                ## This is where the required output is created
+                ## ============================================
+                ##
+                ## Create the folderlist in JSON format 
                 "folderlist": [
                     #foreach($prefix in $foldersExtended)
-                "$prefix"#if($foreach.hasNext),#end
+                        "$prefix"#if($foreach.hasNext),#end  ##add the prefix and a , after every prefix. Except for the last one
                 #end
                 ]
                 ## End of JSON output
                 }
-                #*
-                #set($rawBody = $util.escapeJavaScript($input.body)) 
-                "--------"
-                $rawBody
-                "--------"
-                #foreach($part in $rawBody.split("<CommonPrefixes>"))
-                    "= 0 =="
-                    foreach: $foreach.index
-                    #if($foreach.index > 0)
-                        "= 1 =="
-                        #set($segment=$part.replaceAll("<Prefix>", ""))
-                        "= 2 =="
-                        $segment
-                        "= 3 =="
-                        #set($name = $segment.split("<\\\/Prefix>")[0])
-                        "= 4 =="
-                        $name
-                        "= 5 =="
-                        $name.length()
-                        "= 6 =="
-                        $name.replaceAll("\\\/","")
-                        ## if($name.endsWith("\\\/")) #set($name = $name.substring(0, $name.length() - 2)) #end
-                        "= 7 =="
-                        $name
-                        "= 8 =="
-                    #end        
-                #end                
-                "--------"
-                *#
-                #*
-                #set($folders1 = [])
-                #foreach($segment1 in $rawBody.split("<Prefix>"))
-                    $util.toJson($segment1)
-                #end                
-                #set($rawBody2 = $rawBody.replaceAll("<\?xml.*?\\?>\n", ""))
-                #set($folders2 = [])
-                #foreach($segment2 in $rawBody2.split("<Prefix>"))
-                    $util.toJson($segment2)
-                #end                
-                *#
-                ##
-                ##  The actual constructed json output
-                ##
-                #*
-                {
-                "body-raw" : "$rawBody",
-                "body-raw2" : "$rawBody2",
-                },
-                *#
-                #*
-                {
-                "params" : {
-                #foreach($type in $allParams.keySet())
-                    #set($params = $allParams.get($type))
-                "$type" : {
-                    #foreach($paramName in $params.keySet())
-                    "$paramName" : "$util.escapeJavaScript($params.get($paramName))"
-                        #if($foreach.hasNext),#end
-                    #end
-                }
-                    #if($foreach.hasNext),#end
-                #end
-                },
-                *#
-                #*
-                "stage-variables" : {
-                #foreach($key in $stageVariables.keySet())
-                "$key" : "$util.escapeJavaScript($stageVariables.get($key))"
-                    #if($foreach.hasNext),#end
-                #end
-                },
-                *#
-                #*
-                "context" : {
-                    "account-id" : "$context.identity.accountId",
-                    "api-id" : "$context.apiId",
-                    "api-key" : "$context.identity.apiKey",
-                    "authorizer-principal-id" : "$context.authorizer.principalId",
-                    "caller" : "$context.identity.caller",
-                    "cognito-authentication-provider" : "$context.identity.cognitoAuthenticationProvider",
-                    "cognito-authentication-type" : "$context.identity.cognitoAuthenticationType",
-                    "cognito-identity-id" : "$context.identity.cognitoIdentityId",
-                    "cognito-identity-pool-id" : "$context.identity.cognitoIdentityPoolId",
-                    "http-method" : "$context.httpMethod",
-                    "stage" : "$context.stage",
-                    "source-ip" : "$context.identity.sourceIp",
-                    "user" : "$context.identity.user",
-                    "user-agent" : "$context.identity.userAgent",
-                    "user-arn" : "$context.identity.userArn",
-                    "request-id" : "$context.requestId",
-                    "resource-id" : "$context.resourceId",
-                    "resource-path" : "$context.resourcePath"
-                    }
-                *#
-                #*
-                }
-                *#
 
           - StatusCode: 403
             SelectionPattern: '403'
@@ -469,28 +368,94 @@ Resources:
               method.response.header.Access-Control-Allow-Origin: !Ref APICORSAllowOrigin
               method.response.header.Content-Type: "'application/json'"
             ResponseTemplates:
+#              application/json: |
+#                #set($inputRoot = $input.path('$'))
+#                #set($prefixes = [])
+#                #set($complexParam = $input.params('complex'))
+#                #if($complexParam && $complexParam.length() > 0)
+#                  #set($complexPrefix = $complexParam + '/')
+#                  #if($inputRoot.ListBucketResult.CommonPrefixes)
+#                    #foreach($prefix in $inputRoot.ListBucketResult.CommonPrefixes)
+#                      #set($prefixStr = $prefix.Prefix.toString())
+#                      #if($prefixStr.startsWith($complexPrefix))
+#                        #set($subPath = $prefixStr.substring($complexPrefix.length()))
+#                        #if($subPath.endsWith('/'))
+#                          #set($subPath = $subPath.substring(0, $subPath.length() - 1))
+#                        #end
+#                        #if($subPath.length() > 0)
+#                          #set($void = $prefixes.add($subPath))
+#                        #end
+#                      #end
+#                    #end
+#                  #end
+#                #end
+#                $util.toJson($prefixes)
+
               application/xml: |
-                #set($inputRoot = $input.path('$'))
-                #set($prefixes = [])
-                #set($complexParam = $input.params('complex'))
-                #if($complexParam && $complexParam.length() > 0)
-                  #set($complexPrefix = $complexParam + '/')
-                  #if($inputRoot.ListBucketResult.CommonPrefixes)
-                    #foreach($prefix in $inputRoot.ListBucketResult.CommonPrefixes)
-                      #set($prefixStr = $prefix.Prefix.toString())
-                      #if($prefixStr.startsWith($complexPrefix))
-                        #set($subPath = $prefixStr.substring($complexPrefix.length()))
-                        #if($subPath.endsWith('/'))
-                          #set($subPath = $subPath.substring(0, $subPath.length() - 1))
-                        #end
-                        #if($subPath.length() > 0)
-                          #set($void = $prefixes.add($subPath))
-                        #end
-                      #end
-                    #end
-                  #end
+                ##  This template will create a list of all the folders in complex
+                ##
+                ##  https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-mapping-template-reference.html
+                ##
+                ## For debuging purposes set debugVTL to true (extra output) or false (=no extra output)
+                #set($debugVTL = true)
+                ##
+                ## Start of JSON output
+                {
+                ## input.body might have same chars that need escaping to create a valid JSON
+                #if($debugVTL) "DEBUG_inputbody": "$util.escapeJavaScript($input.body)",
                 #end
-                $util.toJson($prefixes)
+                #set($complexParam = $input.params('complex'))
+                #if($debugVTL) "DEBUG_complexParameter": "$complexParam",
+                #end
+                #set($bucketName = "")
+                #foreach($part in $input.body.split("<Name>"))
+                    #if($foreach.index > 0)  ## index starts with 0, first part is not required 
+                        #set($bucketName = $part.split("</Name>")[0]) ## get all text before the prefix
+                    #end
+                #end
+                #if($debugVTL) "DEBUG_bucketName": "$bucketName",
+                #end
+                ##
+                ## https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-mapping-template-reference.html#context-variable-reference
+                #set($resourcePath = $context.resourcePath)
+                #if($debugVTL) "DEBUG_resourcePath": "$resourcePath",
+                #end
+                #set($domainName = $context.domainName)
+                #if($debugVTL) "DEBUG_domainName": "$domainName",
+                #end
+                #set($stageName = $context.stage)
+                #if($debugVTL) "DEBUG_stageName": "$stageName",
+                #end
+                #set($pathText = $context.path)
+                #if($debugVTL) "DEBUG_pathText": "$pathText",
+                #end
+                #set($folders = [])
+                #set($foldersExtended = [])
+                #foreach($part in $input.body.split("<CommonPrefixes>"))
+                    #if($foreach.index > 0)  ## index starts with 0, first part is not required 
+                        #set($segment = $part.replaceAll("<Prefix>", ""))  ## remove <Prefix> text from part
+                        #set($name = $segment.split("</Prefix>")[0]) ## get all text before the prefix
+                        #if($name != "")
+                            #set($void = $folders.add($name))
+                            #set($void = $foldersExtended.add("https://$domainName$pathText$name"))
+                        #end        
+                    #end 
+                #end
+                #if($debugVTL) "DEBUG_folders": "$folders",
+                #end
+                ##
+                ## This is where the required output is created
+                ## ============================================
+                ##
+                ## Create the folderlist in JSON format 
+                "folderlist": [
+                    #foreach($prefix in $foldersExtended)
+                        "$prefix"#if($foreach.hasNext),#end  ##add the prefix and a , after every prefix. Except for the last one
+                #end
+                ]
+                ## End of JSON output
+                }
+
           - StatusCode: 403
             SelectionPattern: '403'
             ResponseParameters:

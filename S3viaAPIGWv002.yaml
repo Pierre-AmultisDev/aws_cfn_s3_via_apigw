@@ -25,12 +25,14 @@
 #
 AWSTemplateFormatVersion: '2010-09-09'
 Description: |
-  REST API (API Gateway) directly integrated with S3 Path: /{complex}/{zip_no}/... CORS, API-Key, CloudWatch Logs, no Lambda.
+  REST API (API Gateway) directly integrated with S3 Path: /{complex}/{zip_no}/... 
+  CORS, API-Key, CloudWatch Logs, no Lambda.
 
 Parameters:
   CloudWatchRoleArn:
     Type: String
     Description: ARN of the IAM role that API Gateway can assume to write CloudWatch logs
+    Default: ''
 
   BucketName:
     Type: String
@@ -46,13 +48,12 @@ Parameters:
     Type: String
     Description: 'Name of the API Gateway stage'
     Default: 'dev'
-
-#Conditions:
-#  #result can be True or False
-#  ShouldCreateBucket: 
-#    !Equals [!Ref BucketName, ''] # if BucketName = '' then True =-> auto generate a new bucket
-#  UseProvidedBucketName: !Not [!Equals [!Ref BucketName, '']]
-#  CreateNewBucket: !Equals [!Ref BucketName, '']
+    
+  APICORSAllowOrigin:
+    Type: String
+    Description: 'Name of the API Gateway stage'
+    Default: "'*'"
+    
 
 Conditions:
   UseProvidedCloudWatchRole: !Not [!Equals [!Ref CloudWatchRoleArn, '']]
@@ -64,9 +65,13 @@ Resources:
   ###############################################################################
   DocumentsBucket:
     Type: AWS::S3::Bucket
-#    Condition: ShouldCreateBucket
     Properties:
       BucketName: !Ref BucketName
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
       CorsConfiguration:
         CorsRules:
           - AllowedHeaders:
@@ -79,14 +84,15 @@ Resources:
               - HEAD
             AllowedOrigins:
               - '*'
+            MaxAge: 3000
 
   ###############################################################################
   #  IAM
   ###############################################################################
-  # IAM Role for API Gateway to access S3
   ApiGatewayRole:
     Type: AWS::IAM::Role
     Properties:
+      RoleName: !Sub '${AWS::StackName}-ApiGateway-S3-Role'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -95,7 +101,7 @@ Resources:
               Service: apigateway.amazonaws.com
             Action: sts:AssumeRole
       Policies:
-        - PolicyName: S3Access
+        - PolicyName: !Sub 'S3AccessFor${AWS::StackName}'
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
@@ -104,26 +110,19 @@ Resources:
                   - s3:GetObject
                   - s3:PutObject
                   - s3:DeleteObject
-                  - s3:ListBucket
                 Resource:
                   - !Sub arn:aws:s3:::${BucketName}/*
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource:
                   - !Sub arn:aws:s3:::${BucketName}
 
-  # API Gateway Account Settings for CloudWatch
-  # Specifies the IAM role that Amazon API Gateway uses to write API logs to Amazon CloudWatch Logs
-  ApiGatewayAccount:
-    Type: 'AWS::ApiGateway::Account'
-    Properties:
-      CloudWatchRoleArn: !If 
-        - UseProvidedCloudWatchRole
-        - !Ref CloudWatchRoleArn
-        - !GetAtt CloudWatchLogsRole.Arn
-
-  # CloudWatch Role (if not provided)
   CloudWatchLogsRole:
     Type: 'AWS::IAM::Role'
     Condition: CreateNewCloudWatchRole
     Properties:
+      RoleName: !Sub '${AWS::StackName}-ApiGateway-CloudWatch-Role'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -134,17 +133,50 @@ Resources:
       ManagedPolicyArns:
         - 'arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs'
 
+  ApiGatewayAccount:
+    Type: 'AWS::ApiGateway::Account'
+    Properties:
+      CloudWatchRoleArn: !If 
+        - UseProvidedCloudWatchRole
+        - !Ref CloudWatchRoleArn
+        - !GetAtt CloudWatchLogsRole.Arn
+
   ###############################################################################
-  #  REST API  (API Gateway V1)
+  #  CloudWatch Log Group
   ###############################################################################
-  # ToDo rename RestApi DocumentsAPI
+  ApiGatewayLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/apigateway/${AWS::StackName}-${APIName}'
+      RetentionInDays: 30
+
+  ###############################################################################
+  #  Request Validator
+  ###############################################################################
+  RequestValidator:
+    Type: AWS::ApiGateway::RequestValidator
+    Properties:
+      RestApiId: !Ref RestApi
+      ValidateRequestParameters: true
+      ValidateRequestBody: false
+
+  ###############################################################################
+  #  REST API
+  ###############################################################################
   RestApi:
     Type: AWS::ApiGateway::RestApi
     Properties:
-      Name: !Sub ${AWS::StackName}-DocumentsAPI
+      Name: !Sub '${AWS::StackName}-${APIName}'
+      Description: !Sub 'Documents API for ${AWS::StackName}'
       EndpointConfiguration:
         Types:
           - REGIONAL
+      BinaryMediaTypes:
+        - 'application/pdf'
+        - 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        - 'application/msword'
+        - 'image/*'
+        - 'application/octet-stream'
 
   ComplexResource:
     Type: AWS::ApiGateway::Resource
@@ -174,15 +206,24 @@ Resources:
     Type: AWS::ApiGateway::ApiKey
     DependsOn: APIStage
     Properties:
-      Name: !Sub ${AWS::StackName}-API-key
+      Name: !Sub '${AWS::StackName}-API-key'
+      Description: !Sub 'API Key for ${AWS::StackName} Documents API'
       Enabled: true
 
   UsagePlan:
     Type: AWS::ApiGateway::UsagePlan
     Properties:
+      UsagePlanName: !Sub '${AWS::StackName}-usage-plan'
+      Description: !Sub 'Usage plan for ${AWS::StackName} Documents API'
       ApiStages:
         - ApiId: !Ref RestApi
           Stage: !Ref APIStage
+      Throttle:
+        BurstLimit: 200
+        RateLimit: 100
+      Quota:
+        Limit: 10000
+        Period: DAY
 
   UsagePlanKey:
     Type: AWS::ApiGateway::UsagePlanKey
@@ -192,9 +233,15 @@ Resources:
       UsagePlanId: !Ref UsagePlan
 
   ###############################################################################
+  #  Methods
+  ###############################################################################
+  ###############################################################################
   #  GET  /
   #  List all complex folders via delimiter query
   ###############################################################################
+  #
+  # === WORKS ===
+  #  
   RootGetMethod:
     Type: AWS::ApiGateway::Method
     Properties:
@@ -206,6 +253,7 @@ Resources:
       # ----------------------------
       AuthorizationType: NONE
       ApiKeyRequired: true
+      RequestValidatorId: !Ref RequestValidator
       # RequestParameters:
 
       # Integration request settings
@@ -214,7 +262,7 @@ Resources:
         Type: AWS
         IntegrationHttpMethod: GET
         Credentials: !GetAtt ApiGatewayRole.Arn
-        Uri: !Sub arn:aws:apigateway:${AWS::Region}:s3:path/${BucketName}
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:s3:path/${BucketName}'
         RequestParameters:
           integration.request.querystring.list-type: "'2'"
           integration.request.querystring.delimiter: "'/'"
@@ -224,14 +272,105 @@ Resources:
         # ----------------------------
         IntegrationResponses:
           - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: !Ref APICORSAllowOrigin
+              method.response.header.Content-Type: "'application/json'"
             ResponseTemplates:
+#              application/json: |
+#                ## 1) Ruim de XML-declaratie en namespace op
+#                #set($raw1 = $input.body)
+#                #set($raw2 = $raw1.replaceAll("<\\?xml.*?\\?>", ""))
+#                #set($raw = $raw2.replaceAll("xmlns=\"[^\"]*\"", ""))
+#                ## 2) Prepareer de lijst
+#                #set($folders = [])
+#                ## 3) Split op <Prefix> en haal tussen de tags de foldernaam
+#                #foreach($segment in $raw.split("<Prefix>"))
+#                  #if($foreach.index > 0)
+#                    ## pak alles v??r </Prefix>
+#                    #set($name = $segment.split("</Prefix>")[0])
+#                    ## verwijder trailing slash
+#                    #if($name.endsWith("/"))
+#                      #set($name = $name.substring(0, $name.length() - 1))
+#                    #end
+#                    ## voeg toe als niet-leeg
+#                    #if($name != "")
+#                      #set($void = $folders.add($name))
+#                    #end
+#                  #end
+#                #end
+#                ## 4) Output als JSON
+#                $util.toJson($folders)
+
               application/xml: |
-                #set($inputRoot = $input.path('$'))
-                #set($prefixes = [])
-                #foreach($prefix in $inputRoot.ListBucketResult.CommonPrefixes)
-                  #set($void = $prefixes.add($prefix.Prefix))
+                ##  This template will create a list of all the folders in the root
+                ##
+                ##  https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-mapping-template-reference.html
+                ##
+                ## For debuging purposes set debugVTL to true (extra output) or false (=no extra output)
+                #set($debugVTL = true)
+                ##
+                ## Start of JSON output
+                {
+                ## input.body might have same chars that need escaping to create a valid JSON
+                #if($debugVTL) "DEBUG_inputbody": "$util.escapeJavaScript($input.body)",
                 #end
-                $util.toJson($prefixes)
+                #set($bucketName = "")
+                #foreach($part in $input.body.split("<Name>"))
+                    #if($foreach.index > 0)  ## index starts with 0, first part is not required 
+                        #set($bucketName = $part.split("</Name>")[0]) ## get all text before the prefix
+                    #end
+                #end
+                #if($debugVTL) "DEBUG_bucketName": "$bucketName",
+                #end
+                ##
+                ## https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-mapping-template-reference.html#context-variable-reference
+                #set($resourcePath = $context.resourcePath)
+                #if($debugVTL) "DEBUG_resourcePath": "$resourcePath",
+                #end
+                #set($domainName = $context.domainName)
+                #if($debugVTL) "DEBUG_domainName": "$domainName",
+                #end
+                #set($stageName = $context.stage)
+                #if($debugVTL) "DEBUG_stageName": "$stageName",
+                #end
+                #set($pathText = $context.path)
+                #if($debugVTL) "DEBUG_pathText": "$pathText",
+                #end
+                #set($folders = [])
+                #set($foldersExtended = [])
+                #foreach($part in $input.body.split("<CommonPrefixes>"))
+                    #if($foreach.index > 0)  ## index starts with 0, first part is not required 
+                        #set($segment = $part.replaceAll("<Prefix>", ""))  ## remove <Prefix> text from part
+                        #set($name = $segment.split("</Prefix>")[0]) ## get all text before the prefix
+                        #if($name != "")
+                            #set($void = $folders.add($name))
+                            #set($void = $foldersExtended.add("https://$domainName$pathText$name"))
+                        #end        
+                    #end 
+                #end
+                #if($debugVTL) "DEBUG_folders": "$folders",
+                #end
+                ##
+                ## This is where the required output is created
+                ## ============================================
+                ##
+                ## Create the folderlist in JSON format 
+                "folderlist": [
+                    #foreach($prefix in $foldersExtended)
+                        "$prefix"#if($foreach.hasNext),#end  ##add the prefix and a , after every prefix. Except for the last one
+                #end
+                ]
+                ## End of JSON output
+                }
+
+          - StatusCode: 403
+            SelectionPattern: '403'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: !Ref APICORSAllowOrigin
+          - StatusCode: 500
+            SelectionPattern: '5\d{2}'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: !Ref APICORSAllowOrigin
 
       # Method response settings
       # ----------------------------
@@ -239,13 +378,22 @@ Resources:
         - StatusCode: 200
           ResponseParameters:
             method.response.header.Access-Control-Allow-Origin: true
-            method.response.header.Access-Control-Allow-Headers: true
-            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Content-Type: true
+        - StatusCode: 403
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
 
   ###############################################################################
-  #  GET  /{complex}
+  #  GET  /{complex}    doesn't work
+  #  GET  /{complex}/   works 
   #  List zip_no folders inside complex
   ###############################################################################
+  #
+  # === NEEDS TESTING ===
+  #
   ComplexGetMethod:
     Type: AWS::ApiGateway::Method
     Properties:
@@ -257,36 +405,127 @@ Resources:
       # ----------------------------
       AuthorizationType: NONE
       ApiKeyRequired: true
+      RequestValidatorId: !Ref RequestValidator
       RequestParameters:
         method.request.path.complex: true
 
-      # ----------------------------
+      # Integration request settings
+      # ----------------------------  
       Integration:
         Type: AWS
         IntegrationHttpMethod: GET
         Credentials: !GetAtt ApiGatewayRole.Arn
-        Uri: !Sub arn:aws:apigateway:${AWS::Region}:s3:path/${BucketName}/{complex_code}/
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:s3:path/${BucketName}'
         RequestParameters:
           integration.request.querystring.list-type: "'2'"
           integration.request.querystring.delimiter: "'/'"
-          integration.request.querystring.prefix: "method.request.path.complex" 
-          integration.request.path.complex_code: method.request.path.complex  # used in Uri Path
+          integration.request.querystring.prefix: "method.request.path.complex"
         PassthroughBehavior: WHEN_NO_TEMPLATES
 
         # Integration response settings
         # ----------------------------
         IntegrationResponses:
           - StatusCode: 200
-            ResponseTemplates:
-              application/xml: |
-                #set($inputRoot = $input.path('$'))
-                #set($prefixes = [])
-                #foreach($prefix in $inputRoot.ListBucketResult.CommonPrefixes)
-                  #set($void = $prefixes.add($prefix.Prefix))
-                #end
-                $util.toJson($prefixes)
             ResponseParameters:
-              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Origin: !Ref APICORSAllowOrigin
+              method.response.header.Content-Type: "'application/json'"
+            ResponseTemplates:
+#              application/json: |
+#                #set($inputRoot = $input.path('$'))
+#                #set($prefixes = [])
+#                #set($complexParam = $input.params('complex'))
+#                #if($complexParam && $complexParam.length() > 0)
+#                  #set($complexPrefix = $complexParam + '/')
+#                  #if($inputRoot.ListBucketResult.CommonPrefixes)
+#                    #foreach($prefix in $inputRoot.ListBucketResult.CommonPrefixes)
+#                      #set($prefixStr = $prefix.Prefix.toString())
+#                      #if($prefixStr.startsWith($complexPrefix))
+#                        #set($subPath = $prefixStr.substring($complexPrefix.length()))
+#                        #if($subPath.endsWith('/'))
+#                          #set($subPath = $subPath.substring(0, $subPath.length() - 1))
+#                        #end
+#                        #if($subPath.length() > 0)
+#                          #set($void = $prefixes.add($subPath))
+#                        #end
+#                      #end
+#                    #end
+#                  #end
+#                #end
+#                $util.toJson($prefixes)
+
+              application/xml: |
+                ##  This template will create a list of all the folders in the root
+                ##
+                ##  https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-mapping-template-reference.html
+                ##
+                ## For debuging purposes set debugVTL to true (extra output) or false (=no extra output)
+                #set($debugVTL = true)
+                ##
+                ## Start of JSON output
+                {
+                ## input.body might have same chars that need escaping to create a valid JSON
+                #if($debugVTL) "DEBUG_inputbody": "$util.escapeJavaScript($input.body)",
+                #end
+                #set($complexParam = $input.params('complex'))
+                #if($debugVTL) "DEBUG_complexParameter": "$complexParam",
+                #end
+                #set($bucketName = "")
+                #foreach($part in $input.body.split("<Name>"))
+                    #if($foreach.index > 0)  ## index starts with 0, first part is not required 
+                        #set($bucketName = $part.split("</Name>")[0]) ## get all text before the prefix
+                    #end
+                #end
+                #if($debugVTL) "DEBUG_bucketName": "$bucketName",
+                #end
+                ##
+                ## https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-mapping-template-reference.html#context-variable-reference
+                #set($resourcePath = $context.resourcePath)
+                #if($debugVTL) "DEBUG_resourcePath": "$resourcePath",
+                #end
+                #set($domainName = $context.domainName)
+                #if($debugVTL) "DEBUG_domainName": "$domainName",
+                #end
+                #set($stageName = $context.stage)
+                #if($debugVTL) "DEBUG_stageName": "$stageName",
+                #end
+                #set($pathText = $context.path)
+                #if($debugVTL) "DEBUG_pathText": "$pathText",
+                #end
+                #set($folders = [])
+                #set($foldersExtended = [])
+                #foreach($part in $input.body.split("<CommonPrefixes>"))
+                    #if($foreach.index > 0)  ## index starts with 0, first part is not required 
+                        #set($segment = $part.replaceAll("<Prefix>", ""))  ## remove <Prefix> text from part
+                        #set($name = $segment.split("</Prefix>")[0]) ## get all text before the prefix
+                        #if($name != "")
+                            #set($void = $folders.add($name))
+                            #set($void = $foldersExtended.add("https://$domainName$pathText$name"))
+                        #end        
+                    #end 
+                #end
+                #if($debugVTL) "DEBUG_folders": "$folders",
+                #end
+                ##
+                ## This is where the required output is created
+                ## ============================================
+                ##
+                ## Create the folderlist in JSON format 
+                "folderlist": [
+                    #foreach($prefix in $foldersExtended)
+                        "$prefix"#if($foreach.hasNext),#end  ##add the prefix and a , after every prefix. Except for the last one
+                #end
+                ]
+                ## End of JSON output
+                }
+
+          - StatusCode: 403
+            SelectionPattern: '403'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: !Ref APICORSAllowOrigin
+          - StatusCode: 500
+            SelectionPattern: '5\d{2}'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: !Ref APICORSAllowOrigin
 
       # Method response settings
       # ----------------------------
@@ -294,8 +533,13 @@ Resources:
         - StatusCode: 200
           ResponseParameters:
             method.response.header.Access-Control-Allow-Origin: true
-            method.response.header.Access-Control-Allow-Headers: true
-            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Content-Type: true
+        - StatusCode: 403
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
 
   ###############################################################################
   #  PUT  /{complex}
@@ -320,6 +564,7 @@ Resources:
       # ----------------------------
       AuthorizationType: NONE
       ApiKeyRequired: true
+      RequestValidatorId: !Ref RequestValidator
       RequestParameters:
         method.request.path.complex: true
 
@@ -329,15 +574,25 @@ Resources:
         Type: AWS
         IntegrationHttpMethod: PUT
         Credentials: !GetAtt ApiGatewayRole.Arn
-        Uri: !Sub arn:aws:apigateway:${AWS::Region}:s3:path/${BucketName}/{complex_code}/
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:s3:path/${BucketName}/{complex}/'
         RequestParameters:
-          integration.request.path.complex_code: method.request.path.complex  # used in Uri Path
-        PassthroughBehavior: WHEN_NO_TEMPLATES
+          integration.request.path.complex: 'method.request.path.complex'
+        PassthroughBehavior: WHEN_NO_MATCH
 
         # Integration response settings
         # ----------------------------
         IntegrationResponses:
           - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: !Ref APICORSAllowOrigin
+          - StatusCode: 403
+            SelectionPattern: '403'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: !Ref APICORSAllowOrigin
+          - StatusCode: 500
+            SelectionPattern: '5\d{2}'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: !Ref APICORSAllowOrigin
 
       # Method response settings
       # ----------------------------
@@ -345,13 +600,21 @@ Resources:
         - StatusCode: 200
           ResponseParameters:
             method.response.header.Access-Control-Allow-Origin: true
-            method.response.header.Access-Control-Allow-Headers: true
-            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 403
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
 
   ###############################################################################
   #  GET  /{complex}/{zip_no}
+  #  GET  /{complex}/{zip_no}/
   #  List file names
   ###############################################################################
+  #
+  # === NEEDS TESTING ===
+  #
   ZipNoGetMethod:
     Type: AWS::ApiGateway::Method
     Properties:
@@ -363,6 +626,10 @@ Resources:
       # ----------------------------
       AuthorizationType: NONE
       ApiKeyRequired: true
+      RequestValidatorId: !Ref RequestValidator
+      RequestParameters:
+        method.request.path.complex: true
+        method.request.path.zip_no: true
 
       # Integration request settings
       # ----------------------------
@@ -370,30 +637,73 @@ Resources:
         Type: AWS
         IntegrationHttpMethod: GET
         Credentials: !GetAtt ApiGatewayRole.Arn
-        Uri: !Sub arn:aws:apigateway:${AWS::Region}:s3:path/${BucketName}
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:s3:path/${BucketName}/{complex}/{zip_no}/'
+        RequestParameters:
+          integration.request.querystring.list-type: "'2'"
+          integration.request.path.complex: 'method.request.path.complex'
+          integration.request.path.zip_no: 'method.request.path.zip_no'
         PassthroughBehavior: WHEN_NO_TEMPLATES
 
         # Integration response settings
         # ----------------------------
         IntegrationResponses:
           - StatusCode: 200
-             ResponseTemplates:
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: !Ref APICORSAllowOrigin
+              method.response.header.Content-Type: "'application/json'"
+            ResponseTemplates:
               application/xml: |
                 #set($inputRoot = $input.path('$'))
-                #set($prefixes = [])
-                #foreach($prefix in $inputRoot.ListBucketResult.CommonPrefixes)
-                  #set($void = $prefixes.add($prefix.Prefix))
+                #set($objects = [])
+                #if($inputRoot.ListBucketResult.Contents)
+                  #foreach($content in $inputRoot.ListBucketResult.Contents)
+                    #set($keyStr = $content.Key.toString())
+                    #if(!$keyStr.endsWith('/'))
+                      #set($lastSlash = $keyStr.lastIndexOf('/'))
+                      #if($lastSlash >= 0)
+                        #set($fileName = $keyStr.substring($lastSlash + 1))
+                      #else
+                        #set($fileName = $keyStr)
+                      #end
+                      #set($fileObj = {
+                        "name": $fileName,
+                        "size": $content.Size,
+                        "lastModified": $content.LastModified.toString()
+                      })
+                      #set($void = $objects.add($fileObj))
+                    #end
+                  #end
                 #end
-                $util.toJson($prefixes)
-                
+                $util.toJson($objects)
+          - StatusCode: 403
+            SelectionPattern: '403'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: !Ref APICORSAllowOrigin
+          - StatusCode: 404
+            SelectionPattern: '404'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: !Ref APICORSAllowOrigin
+          - StatusCode: 500
+            SelectionPattern: '5\d{2}'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: !Ref APICORSAllowOrigin
+
       # Method response settings
       # ----------------------------
       MethodResponses:
         - StatusCode: 200
           ResponseParameters:
             method.response.header.Access-Control-Allow-Origin: true
-            method.response.header.Access-Control-Allow-Headers: true
-            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Content-Type: true
+        - StatusCode: 403
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
 
   ###############################################################################
   #  PUT  /{complex}/{zip_no}
@@ -418,6 +728,7 @@ Resources:
       # ----------------------------
       AuthorizationType: NONE
       ApiKeyRequired: true
+      RequestValidatorId: !Ref RequestValidator
       RequestParameters:
         method.request.path.complex: true
         method.request.path.zip_no: true
@@ -428,15 +739,26 @@ Resources:
         Type: AWS
         IntegrationHttpMethod: PUT
         Credentials: !GetAtt ApiGatewayRole.Arn
-        Uri: !Sub arn:aws:apigateway:${AWS::Region}:s3:path/${BucketName}/{complex_code}/{zipno}/
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:s3:path/${BucketName}/{complex}/{zip_no}/'
         RequestParameters:
-          integration.request.path.complex_code: method.request.path.complex  # used in Uri Path
-          integration.request.path.zipno: method.request.path.zip_no  # used in Uri Path
+          integration.request.path.complex: 'method.request.path.complex'
+          integration.request.path.zip_no: 'method.request.path.zip_no'
+        PassthroughBehavior: WHEN_NO_MATCH
 
         # Integration response settings
-        # ----------------------------
+        # ---------------------------- 
         IntegrationResponses:
           - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: !Ref APICORSAllowOrigin
+          - StatusCode: 403
+            SelectionPattern: '403'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: !Ref APICORSAllowOrigin
+          - StatusCode: 500
+            SelectionPattern: '5\d{2}'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: !Ref APICORSAllowOrigin
 
       # Method response settings
       # ----------------------------
@@ -444,8 +766,12 @@ Resources:
         - StatusCode: 200
           ResponseParameters:
             method.response.header.Access-Control-Allow-Origin: true
-            method.response.header.Access-Control-Allow-Headers: true
-            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 403
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
 
   ###############################################################################
   #  GET /{complex}/{zip_no}/{filename}
@@ -465,36 +791,59 @@ Resources:
       # ----------------------------
       AuthorizationType: NONE
       ApiKeyRequired: true
+      RequestValidatorId: !Ref RequestValidator
       RequestParameters:
         method.request.path.complex: true
         method.request.path.filename: true
         method.request.path.zip_no: true
-      RequestModels: {}
 
       # Integration request settings
       # ----------------------------
       Integration:
         Type: AWS
         IntegrationHttpMethod: GET
-        Uri: !Sub arn:aws:apigateway:${AWS::Region}:s3:path/${BucketName}/{complex_code}/{zipno}/{file}
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:s3:path/${BucketName}/{complex}/{zip_no}/{filename}'
         Credentials: !GetAtt ApiGatewayRole.Arn
         RequestParameters:
-          integration.request.path.zipno: method.request.path.zip_no  # used in Uri Path
-          integration.request.path.complex_code: method.request.path.complex  # used in Uri Path
-          integration.request.path.file: method.request.path.filename  # used in Uri Path
+          integration.request.path.complex: 'method.request.path.complex'
+          integration.request.path.zip_no: 'method.request.path.zip_no'
+          integration.request.path.filename: 'method.request.path.filename'
         PassthroughBehavior: WHEN_NO_MATCH
 
         # Integration response settings
         # ----------------------------
         IntegrationResponses:
           - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: !Ref APICORSAllowOrigin
+          - StatusCode: 403
+            SelectionPattern: '403'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: !Ref APICORSAllowOrigin
+          - StatusCode: 404
+            SelectionPattern: '404'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: !Ref APICORSAllowOrigin
+          - StatusCode: 500
+            SelectionPattern: '5\d{2}'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: !Ref APICORSAllowOrigin
 
       # Method response settings
       # ----------------------------
       MethodResponses:
         - StatusCode: 200
-          ResponseModels:
-            application/json: Empty
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 403
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
 
   ###############################################################################
   #  PUT /{complex}/{zip_no}/{filename}
@@ -514,28 +863,39 @@ Resources:
       # ----------------------------
       AuthorizationType: NONE
       ApiKeyRequired: true
+      RequestValidatorId: !Ref RequestValidator
       RequestParameters:
         method.request.path.complex: true
         method.request.path.filename: true
         method.request.path.zip_no: true
 
       # Integration request settings
-      # ----------------------------
+      # ---------------------------- 
       Integration:
         Type: AWS
         IntegrationHttpMethod: PUT
-        Uri: !Sub arn:aws:apigateway:${AWS::Region}:s3:path/${BucketName}/{complex_code}/{zipno}/{file}
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:s3:path/${BucketName}/{complex}/{zip_no}/{filename}'
         Credentials: !GetAtt ApiGatewayRole.Arn
         RequestParameters:
-          integration.request.path.complex_code: method.request.path.complex  # used in Uri Path
-          integration.request.path.zipno: method.request.path.zip_no  # used in Uri Path
-          integration.request.path.file: method.request.path.filename  # used in Uri Path
+          integration.request.path.complex: 'method.request.path.complex'
+          integration.request.path.zip_no: 'method.request.path.zip_no'
+          integration.request.path.filename: 'method.request.path.filename'
         PassthroughBehavior: WHEN_NO_MATCH
 
         # Integration response settings
-        # ----------------------------
+        # ----------------------------     
         IntegrationResponses:
           - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: !Ref APICORSAllowOrigin
+          - StatusCode: 403
+            SelectionPattern: '403'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: !Ref APICORSAllowOrigin
+          - StatusCode: 500
+            SelectionPattern: '5\d{2}'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: !Ref APICORSAllowOrigin
 
       # Method response settings
       # ----------------------------
@@ -543,11 +903,90 @@ Resources:
         - StatusCode: 200
           ResponseParameters:
             method.response.header.Access-Control-Allow-Origin: true
-            method.response.header.Access-Control-Allow-Headers: true
-            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 403
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+
+  ###############################################################################
+  #  DELETE /{complex}/{zip_no}/{filename}
+  #  Upload file (text/pdf/docx)
+  ###############################################################################
+  #
+  # === NEEDS TESTING ===
+  #
+  FileDeleteMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref RestApi
+      ResourceId: !Ref FileResource
+      HttpMethod: DELETE
+
+      # Method request settings
+      # ----------------------------
+      AuthorizationType: NONE
+      ApiKeyRequired: true
+      RequestValidatorId: !Ref RequestValidator
+      RequestParameters:
+        method.request.path.complex: true
+        method.request.path.filename: true
+        method.request.path.zip_no: true
+
+      # Integration request settings
+      # ---------------------------- 
+      Integration:
+        Type: AWS
+        IntegrationHttpMethod: DELETE
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:s3:path/${BucketName}/{complex}/{zip_no}/{filename}'
+        Credentials: !GetAtt ApiGatewayRole.Arn
+        RequestParameters:
+          integration.request.path.complex: 'method.request.path.complex'
+          integration.request.path.zip_no: 'method.request.path.zip_no'
+          integration.request.path.filename: 'method.request.path.filename'
+
+        # Integration response settings
+        # ----------------------------     
+        IntegrationResponses:
+          - StatusCode: 204
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: !Ref APICORSAllowOrigin
+          - StatusCode: 403
+            SelectionPattern: '403'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: !Ref APICORSAllowOrigin
+          - StatusCode: 404
+            SelectionPattern: '404'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: !Ref APICORSAllowOrigin
+          - StatusCode: 500
+            SelectionPattern: '5\d{2}'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: !Ref APICORSAllowOrigin
+
+      # Method response settings
+      # ----------------------------
+      MethodResponses:
+        - StatusCode: 204
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 403
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
 
   ###############################################################################
   #  CORS OPTIONS on every resource
+  ###############################################################################
+  ###############################################################################
+  #  OPTIONS /
+  #  
   ###############################################################################
   #
   # === WORKS ===
@@ -558,18 +997,30 @@ Resources:
       RestApiId: !Ref RestApi
       ResourceId: !GetAtt RestApi.RootResourceId
       HttpMethod: OPTIONS
+
+      # Method request settings
+      # ----------------------------
       AuthorizationType: NONE
       ApiKeyRequired: false
+
+      # Integration request settings
+      # ---------------------------- 
       Integration:
         Type: MOCK
+
+        # Integration response settings
+        # ----------------------------     
         IntegrationResponses:
           - StatusCode: 200
             ResponseParameters:
               method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
-              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Origin: !Ref APICORSAllowOrigin
               method.response.header.Access-Control-Allow-Methods: "'GET,PUT,DELETE,OPTIONS'"
         RequestTemplates:
           application/json: '{"statusCode": 200}'
+
+      # Method response settings
+      # ----------------------------
       MethodResponses:
         - StatusCode: 200
           ResponseParameters:
@@ -577,24 +1028,43 @@ Resources:
             method.response.header.Access-Control-Allow-Origin: true
             method.response.header.Access-Control-Allow-Methods: true
 
+  ###############################################################################
+  #  OPTIONS /{complex}
+  #  
+  ###############################################################################
+  #
+  # === WORKS ===
+  #
   OptionsComplex:
     Type: AWS::ApiGateway::Method
     Properties:
       RestApiId: !Ref RestApi
       ResourceId: !Ref ComplexResource
       HttpMethod: OPTIONS
+
+      # Method request settings
+      # ----------------------------
       AuthorizationType: NONE
       ApiKeyRequired: false
+
+      # Integration request settings
+      # ---------------------------- 
       Integration:
         Type: MOCK
+
+        # Integration response settings
+        # ----------------------------     
         IntegrationResponses:
           - StatusCode: 200
             ResponseParameters:
               method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
-              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Origin: !Ref APICORSAllowOrigin
               method.response.header.Access-Control-Allow-Methods: "'GET,PUT,DELETE,OPTIONS'"
         RequestTemplates:
           application/json: '{"statusCode": 200}'
+
+      # Method response settings
+      # ----------------------------
       MethodResponses:
         - StatusCode: 200
           ResponseParameters:
@@ -602,24 +1072,43 @@ Resources:
             method.response.header.Access-Control-Allow-Origin: true
             method.response.header.Access-Control-Allow-Methods: true
 
+  ###############################################################################
+  #  OPTIONS /{complex}/{zip_no}
+  #  
+  ###############################################################################
+  #
+  # === WORKS ===
+  #
   OptionsZipNo:
     Type: AWS::ApiGateway::Method
     Properties:
       RestApiId: !Ref RestApi
       ResourceId: !Ref ZipResource
       HttpMethod: OPTIONS
+
+      # Method request settings
+      # ----------------------------
       AuthorizationType: NONE
       ApiKeyRequired: false
+
+      # Integration request settings
+      # ---------------------------- 
       Integration:
         Type: MOCK
+
+        # Integration response settings
+        # ----------------------------     
         IntegrationResponses:
           - StatusCode: 200
             ResponseParameters:
               method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
-              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Origin: !Ref APICORSAllowOrigin
               method.response.header.Access-Control-Allow-Methods: "'GET,PUT,DELETE,OPTIONS'"
         RequestTemplates:
           application/json: '{"statusCode": 200}'
+
+      # Method response settings
+      # ----------------------------
       MethodResponses:
         - StatusCode: 200
           ResponseParameters:
@@ -627,24 +1116,43 @@ Resources:
             method.response.header.Access-Control-Allow-Origin: true
             method.response.header.Access-Control-Allow-Methods: true
 
+  ###############################################################################
+  #  OPTIONS /{complex}/{zip_no}/{filename}
+  #  
+  ###############################################################################
+  #
+  # === WORKS ===
+  #
   OptionsFile:
     Type: AWS::ApiGateway::Method
     Properties:
       RestApiId: !Ref RestApi
       ResourceId: !Ref FileResource
       HttpMethod: OPTIONS
+
+      # Method request settings
+      # ----------------------------
       AuthorizationType: NONE
       ApiKeyRequired: false
+
+      # Integration request settings
+      # ---------------------------- 
       Integration:
         Type: MOCK
+
+        # Integration response settings
+        # ----------------------------     
         IntegrationResponses:
           - StatusCode: 200
             ResponseParameters:
               method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
-              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Origin: !Ref APICORSAllowOrigin
               method.response.header.Access-Control-Allow-Methods: "'GET,PUT,DELETE,OPTIONS'"
         RequestTemplates:
           application/json: '{"statusCode": 200}'
+
+      # Method response settings
+      # ----------------------------
       MethodResponses:
         - StatusCode: 200
           ResponseParameters:
@@ -655,43 +1163,6 @@ Resources:
   ###############################################################################
   #  Deployment & Stage
   ###############################################################################
-  # 
-  # https://www.alexdebrie.com/posts/api-gateway-access-logs/
-  #
-
-#  # CloudWatch Log Group for API Gateway logs
-#  ApiGatewayLogGroup:
-#    Type: AWS::Logs::LogGroup
-#    Properties:
-#      LogGroupName: !Sub '/aws/apigateway/${APIName}'
-#      RetentionInDays: 30  # You can adjust this value as needed
-
-  APIStage:
-    Type: AWS::ApiGateway::Stage
-    DependsOn:
-#      - ApiGatewayLogGroup
-      - RootGetMethod
-      - ComplexGetMethod
-      - ComplexPutMethod
-      - ZipNoGetMethod
-      - ZipNoPutMethod
-      - FileGetMethod
-      - FilePutMethod
-    Properties:
-      RestApiId: !Ref RestApi
-      DeploymentId: !Ref Deployment
-      StageName: !Ref APIStageName
-      Description: !Sub 'Stage for ${APIName}'
-      MethodSettings:
-        - ResourcePath: /*
-          HttpMethod: '*'
-          LoggingLevel: INFO
-          DataTraceEnabled: true
-          MetricsEnabled: true
-#      AccessLogSetting:
-#        DestinationArn: !GetAtt ApiGatewayLogGroup.Arn
-#        Format: '{ "requestId":"$context.requestId", "ip": "$context.identity.sourceIp", "caller":"$context.identity.caller", "user":"$context.identity.user", "requestTime":"$context.requestTime", "httpMethod":"$context.httpMethod", "resourcePath":"$context.resourcePath", "status":"$context.status", "protocol":"$context.protocol", "responseLength":"$context.responseLength" }'
-
   Deployment:
     Type: AWS::ApiGateway::Deployment
     DependsOn:
@@ -702,9 +1173,32 @@ Resources:
       - ZipNoPutMethod
       - FileGetMethod
       - FilePutMethod
+      - FileDeleteMethod
+      - OptionsRoot
+      - OptionsComplex
+      - OptionsZipNo
+      - OptionsFile
     Properties:
       RestApiId: !Ref RestApi
 
+  APIStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref RestApi
+      DeploymentId: !Ref Deployment
+      StageName: !Ref APIStageName
+      Description: !Sub 'Stage for ${APIName}'
+      MethodSettings:
+        - ResourcePath: '/*'
+          HttpMethod: '*'
+          LoggingLevel: INFO
+          DataTraceEnabled: true
+          MetricsEnabled: true
+          ThrottlingBurstLimit: 200
+          ThrottlingRateLimit: 100
+      AccessLogSetting:
+        DestinationArn: !GetAtt ApiGatewayLogGroup.Arn
+        Format: '{ "requestId":"$context.requestId", "ip": "$context.identity.sourceIp", "caller":"$context.identity.caller", "user":"$context.identity.user", "requestTime":"$context.requestTime", "httpMethod":"$context.httpMethod", "resourcePath":"$context.resourcePath", "status":"$context.status", "protocol":"$context.protocol", "responseLength":"$context.responseLength", "error":"$context.error.message", "integrationError":"$context.integration.error" }'
 
 ###############################################################################
 #  Outputs
@@ -713,15 +1207,45 @@ Outputs:
   S3BucketName:
     Description: Name of the S3 bucket
     Value: !Ref DocumentsBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-S3BucketName'
+
+  S3BucketArn:
+    Description: ARN of the S3 bucket
+    Value: !GetAtt DocumentsBucket.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-S3BucketArn'
 
   RestApiId:
     Description: REST API id
     Value: !Ref RestApi
+    Export:
+      Name: !Sub '${AWS::StackName}-RestApiId'
 
   RestApiUrl:
     Description: Invoke URL
     Value: !Sub 'https://${RestApi}.execute-api.${AWS::Region}.amazonaws.com/${APIStageName}/'
+    Export:
+      Name: !Sub '${AWS::StackName}-RestApiUrl'
 
-  ApiKey:
-    Description: Key value (please store securely)
+  ApiKeyId:
+    Description: API Key ID (use AWS CLI to retrieve the actual key value)
     Value: !Ref ApiKey
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiKeyId'
+
+  ApiGatewayRoleArn:
+    Description: ARN of the API Gateway IAM role
+    Value: !GetAtt ApiGatewayRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiGatewayRoleArn'
+
+  CloudWatchLogGroupName:
+    Description: Name of the CloudWatch Log Group
+    Value: !Ref ApiGatewayLogGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-CloudWatchLogGroupName'
+
+  GetApiKeyCommand:
+    Description: AWS CLI command to retrieve the API key value
+    Value: !Sub 'aws apigateway get-api-key --api-key ${ApiKey} --include-value --query "value" --output text'
