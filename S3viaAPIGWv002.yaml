@@ -237,6 +237,8 @@ Resources:
   ###############################################################################
   ###############################################################################
   #  GET  /
+  #  https://{{APIGW-endpoint}}.execute-api.eu-central-1.amazonaws.com/test/
+  #
   #  List all complex folders via delimiter query
   ###############################################################################
   #
@@ -262,7 +264,7 @@ Resources:
         Type: AWS
         IntegrationHttpMethod: GET
         Credentials: !GetAtt ApiGatewayRole.Arn
-        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:s3:path/${BucketName}'
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:s3:path/${BucketName}/'
         RequestParameters:
           integration.request.querystring.list-type: "'2'"
           integration.request.querystring.delimiter: "'/'"
@@ -276,31 +278,6 @@ Resources:
               method.response.header.Access-Control-Allow-Origin: !Ref APICORSAllowOrigin
               method.response.header.Content-Type: "'application/json'"
             ResponseTemplates:
-#              application/json: |
-#                ## 1) Ruim de XML-declaratie en namespace op
-#                #set($raw1 = $input.body)
-#                #set($raw2 = $raw1.replaceAll("<\\?xml.*?\\?>", ""))
-#                #set($raw = $raw2.replaceAll("xmlns=\"[^\"]*\"", ""))
-#                ## 2) Prepareer de lijst
-#                #set($folders = [])
-#                ## 3) Split op <Prefix> en haal tussen de tags de foldernaam
-#                #foreach($segment in $raw.split("<Prefix>"))
-#                  #if($foreach.index > 0)
-#                    ## pak alles v??r </Prefix>
-#                    #set($name = $segment.split("</Prefix>")[0])
-#                    ## verwijder trailing slash
-#                    #if($name.endsWith("/"))
-#                      #set($name = $name.substring(0, $name.length() - 1))
-#                    #end
-#                    ## voeg toe als niet-leeg
-#                    #if($name != "")
-#                      #set($void = $folders.add($name))
-#                    #end
-#                  #end
-#                #end
-#                ## 4) Output als JSON
-#                $util.toJson($folders)
-
               application/xml: |
                 ##  This template will create a list of all the folders in the root
                 ##
@@ -388,7 +365,9 @@ Resources:
 
   ###############################################################################
   #  GET  /{complex}    doesn't work
-  #  GET  /{complex}/   works 
+  #  GET  /{complex}/   works
+  #  https://{{APIGW-endpoint}}.execute-api.eu-central-1.amazonaws.com/test/999/
+  #  
   #  List zip_no folders inside complex
   ###############################################################################
   #
@@ -415,11 +394,23 @@ Resources:
         Type: AWS
         IntegrationHttpMethod: GET
         Credentials: !GetAtt ApiGatewayRole.Arn
-        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:s3:path/${BucketName}'
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:s3:path/${BucketName}/'
         RequestParameters:
           integration.request.querystring.list-type: "'2'"
           integration.request.querystring.delimiter: "'/'"
           integration.request.querystring.prefix: "method.request.path.complex"
+        RequestTemplates:
+          application/json: |
+            ##  This template will add a / to querystring.prefix
+            ##  because integration.request.querystring.prefix: "method.request.path.complex + '/'"
+            ##  is not allowed.
+            ##
+            ##  Without the / we don't get the correct foldernames from S3
+            ##
+            #set($context.requestOverride.querystring.prefix = $input.params('complex') + "/")
+            ##
+            ## Create an empty json as output              
+            {}
         PassthroughBehavior: WHEN_NO_TEMPLATES
 
         # Integration response settings
@@ -430,29 +421,6 @@ Resources:
               method.response.header.Access-Control-Allow-Origin: !Ref APICORSAllowOrigin
               method.response.header.Content-Type: "'application/json'"
             ResponseTemplates:
-#              application/json: |
-#                #set($inputRoot = $input.path('$'))
-#                #set($prefixes = [])
-#                #set($complexParam = $input.params('complex'))
-#                #if($complexParam && $complexParam.length() > 0)
-#                  #set($complexPrefix = $complexParam + '/')
-#                  #if($inputRoot.ListBucketResult.CommonPrefixes)
-#                    #foreach($prefix in $inputRoot.ListBucketResult.CommonPrefixes)
-#                      #set($prefixStr = $prefix.Prefix.toString())
-#                      #if($prefixStr.startsWith($complexPrefix))
-#                        #set($subPath = $prefixStr.substring($complexPrefix.length()))
-#                        #if($subPath.endsWith('/'))
-#                          #set($subPath = $subPath.substring(0, $subPath.length() - 1))
-#                        #end
-#                        #if($subPath.length() > 0)
-#                          #set($void = $prefixes.add($subPath))
-#                        #end
-#                      #end
-#                    #end
-#                  #end
-#                #end
-#                $util.toJson($prefixes)
-
               application/xml: |
                 ##  This template will create a list of all the folders in the root
                 ##
@@ -479,18 +447,18 @@ Resources:
                 #end
                 ##
                 ## https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-mapping-template-reference.html#context-variable-reference
-                #set($resourcePath = $context.resourcePath)
-                #if($debugVTL) "DEBUG_resourcePath": "$resourcePath",
-                #end
+                ## #set($resourcePath = $context.resourcePath)
+                ## #if($debugVTL) "DEBUG_resourcePath": "$resourcePath",
+                ## #end
                 #set($domainName = $context.domainName)
                 #if($debugVTL) "DEBUG_domainName": "$domainName",
                 #end
                 #set($stageName = $context.stage)
                 #if($debugVTL) "DEBUG_stageName": "$stageName",
                 #end
-                #set($pathText = $context.path)
-                #if($debugVTL) "DEBUG_pathText": "$pathText",
-                #end
+                ## #set($pathText = $context.path)
+                ## #if($debugVTL) "DEBUG_pathText": "$pathText",
+                ## #end
                 #set($folders = [])
                 #set($foldersExtended = [])
                 #foreach($part in $input.body.split("<CommonPrefixes>"))
@@ -499,7 +467,7 @@ Resources:
                         #set($name = $segment.split("</Prefix>")[0]) ## get all text before the prefix
                         #if($name != "")
                             #set($void = $folders.add($name))
-                            #set($void = $foldersExtended.add("https://$domainName$pathText$name"))
+                            #set($void = $foldersExtended.add("https://$domainName/$name"))
                         #end        
                     #end 
                 #end
