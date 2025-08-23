@@ -1,0 +1,22 @@
+[
+  {
+    "ParameterKey": "BucketName",
+    "ParameterValue": "YOUR-S3-BUCKETNAME"
+  },
+  {
+    "ParameterKey": "APIName",
+    "ParameterValue": "S3ACCESSDIRECTVIAAPI"
+  }, 
+  {
+    "ParameterKey": "APIStageName",
+    "ParameterValue": "PROD"
+  },
+  {
+    "ParameterKey": "APICORSAllowOrigin",
+    "ParameterValue": "'*'"
+  },
+  {
+    "ParameterKey": "CloudWatchRoleArn",
+    "ParameterValue": "arn:aws:iam::AWS-ACCOUNTID:role/APIGWRoleForToPushToCloudwatch"
+  }
+]
